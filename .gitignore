@@ -1,0 +1,62 @@
+# ----------------------------
+# Python cache / build files
+# ----------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.dll
+*.log
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# ----------------------------
+# Machine Learning artifacts
+# ----------------------------
+# Model weights / checkpoints
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.pb
+
+# Training outputs
+runs/
+outputs/
+logs/
+checkpoints/
+
+# ----------------------------
+# Datasets
+# ----------------------------
+# Common dataset formats
+*.csv
+*.tsv
+*.h5
+*.hdf5
+*.parquet
+*.pkl
+*.joblib
+*.npy
+*.npz
+
+# Large archives (downloaded datasets)
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# Dataset folders (adjust to your structure)
+data/
+datasets/
+examples/datasets/
+
