@@ -1,28 +1,15 @@
-# adapt/layers_systolic.py
-#for quantization
-import torch.utils.data
-import pytorch_quantization.utils
-import pytorch_quantization.nn.modules._utils as _utils
-from pytorch_quantization import calib
+
+import math
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+# Quantization (unchanged)
 from pytorch_quantization.tensor_quant import QuantDescriptor
 from pytorch_quantization.nn.modules.tensor_quantizer import TensorQuantizer
-from pytorch_quantization import tensor_quant
-import pytorch_quantization.nn as quant_nn
-#
-from torch.utils.cpp_extension import load
-from .torch_utils import _ConvNd, _size_2_t, Union, Tensor, Optional, _pair
-import torch.nn.functional as F 
-import torch.nn as nn
-from torch.nn import Parameter
-import warnings
-from collections import namedtuple
-from typing import List, Tuple
-from torch import Tensor
-import numbers
-import math
 
+from .systolic_build import SystolicBuilder
 
-# Reuse your base modules if you like; here we write compact versions that match your API.
 
 class AdaPT_Linear_Systolic(nn.Module):
     def __init__(self, size_in, size_out, bias=True, axx_mult='mul8s_acc', use_exact=False):
@@ -31,26 +18,23 @@ class AdaPT_Linear_Systolic(nn.Module):
         self.bias_ = bias
         self.bias = nn.Parameter(torch.empty(size_out)) if bias else None
 
-        # Build + load the systolic kernel
-        cflags = [f'-DAXX_MULT={axx_mult}', '-march=native', '-fopenmp', '-O3']
-        if use_exact:
-            cflags.append('-DUSE_EXACT')
-        self.axx_linear_kernel = load(
-            name=('PyInit_linear_systolic_exact_' if use_exact else 'PyInit_linear_systolic_') + axx_mult,
-            sources=['/workspace/adapt/adapt/cpu-kernels/axx_linear_systolic.cpp'],
-            extra_cflags=cflags,
-            extra_ldflags=['-lgomp'],
-            verbose=False
+        # Unique build per mode/LUT to avoid cache collisions
+        builder = SystolicBuilder(sa_rows=16, sa_cols=16, verbose=False)
+        self.axx_linear_kernel = builder.build(
+            op="linear",
+            use_exact=use_exact,
+            axx_mult=axx_mult,
+            src="/workspace/adapt/adapt/cpu-kernels/axx_linear_systolic.cpp",
         )
 
-        # Init
+        # Init (unchanged)
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
         if self.bias is not None:
             fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.weight)
             bound = 1 / math.sqrt(fan_in)
             nn.init.uniform_(self.bias, -bound, bound)
 
-        # Quant
+        # Quant (unchanged)
         num_bits = 8
         unsigned = False
         self.max_value = (2**num_bits - 1) if unsigned else (2**(num_bits-1) - 1)
@@ -93,25 +77,23 @@ class AdaPT_Conv2d_Systolic(nn.Module):
         self.weight = nn.Parameter(torch.empty(out_channels, in_channels//groups, *self.kernel_size))
         self.bias = nn.Parameter(torch.empty(out_channels)) if bias else None
 
-        cflags = [f'-DAXX_MULT={axx_mult}', '-march=native', '-fopenmp', '-O3']
-        if use_exact:
-            cflags.append('-DUSE_EXACT')
-        self.axx_conv2d_kernel = load(
-            name=('PyInit_conv2d_systolic_exact_' if use_exact else 'PyInit_conv2d_systolic_') + axx_mult,
-            sources=['/workspace/adapt/adapt/cpu-kernels/axx_conv2d_systolic.cpp'],
-            extra_cflags=cflags,
-            extra_ldflags=['-lgomp'],
-            verbose=False
+        # Unique build per mode/LUT to avoid cache collisions
+        builder = SystolicBuilder(sa_rows=16, sa_cols=16, verbose=False)
+        self.axx_conv2d_kernel = builder.build(
+            op="conv2d",
+            use_exact=use_exact,
+            axx_mult=axx_mult,
+            src="/workspace/adapt/adapt/cpu-kernels/axx_conv2d_systolic.cpp",
         )
 
-        # init
+        # Init (unchanged)
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
         if self.bias is not None:
-            fan_in = in_channels * self.kernel_size[0] * self.kernel_size[1]
+            fan_in = (in_channels // groups) * self.kernel_size[0] * self.kernel_size[1]
             bound = 1 / math.sqrt(fan_in)
             nn.init.uniform_(self.bias, -bound, bound)
 
-        # Quant
+        # Quant (unchanged)
         num_bits = 8
         unsigned = False
         self.max_value = (2**num_bits - 1) if unsigned else (2**(num_bits-1) - 1)
@@ -122,20 +104,19 @@ class AdaPT_Conv2d_Systolic(nn.Module):
     def forward(self, x):
         if self.padding_mode != 'zeros':
             x = F.pad(x, (self.padding[1], self.padding[1], self.padding[0], self.padding[0]), mode=self.padding_mode)
-            pad = (0,0)
+            pad = (0, 0)
         else:
             pad = self.padding
 
         # Accurate path until calibration exists
         if self.quantizer.amax is None or self.quantizer_w.amax is None:
-            out = F.conv2d(x, self.weight, self.bias, stride=self.stride, padding=pad,
-                           dilation=self.dilation, groups=self.groups)
-            return out
+            return F.conv2d(x, self.weight, self.bias, stride=self.stride, padding=pad,
+                            dilation=self.dilation, groups=self.groups)
 
         qx = self.quantizer(x).to(torch.int8)
         qw = self.quantizer_w(self.weight).to(torch.int8)
 
-        # depthwise groups: split & concat using the same kernel (simple + robust)
+        # depthwise groups: split & concat using the same kernel
         if self.groups > 1 and self.groups == self.in_channels and self.out_channels == self.in_channels:
             outs = []
             for c in range(self.in_channels):
