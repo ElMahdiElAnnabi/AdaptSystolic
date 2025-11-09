@@ -60,7 +60,6 @@ class AdaPT_Linear_Function(torch.autograd.Function):
 
         return grad_input, grad_weight, grad_bias, None, None, None, None, None, None, None
 
-
 class AdaPT_Linear(nn.Module):
     def __init__(self, size_in, size_out, bias=True, axx_mult='mul8s_acc'):
         
@@ -98,9 +97,7 @@ class AdaPT_Linear(nn.Module):
         x = self.fn(x, self.weight, self.bias, self.bias_, self.quantizer, self.quantizer_w, self.quantizer.amax, self.quantizer_w.amax, self.max_value, self.axx_linear_kernel)
         
         return x
-
-      
-
+     
 class AdaPT_Conv2d_Function(torch.autograd.Function):
 
     @staticmethod
@@ -172,8 +169,6 @@ class AdaPT_Conv2d_Function(torch.autograd.Function):
             grad_bias = grad_output.sum(dim=(0, 2, 3))
 
         return grad_input, grad_weight, grad_bias, None, None, None, None, None, None, None, None, None, None, None, None, None, None
-
-
 
 class AdaPT_Conv2d(_ConvNd):
     def __init__(

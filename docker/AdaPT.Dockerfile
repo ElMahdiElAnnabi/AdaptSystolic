@@ -15,7 +15,7 @@ RUN apt-get install -y --no-install-recommends build-essential g++ git make pyth
 RUN pip3 install torch==1.8.1+cpu torchvision==0.9.1+cpu torchaudio==0.8.1 -f https://download.pytorch.org/whl/torch_stable.html
 
 #nvidia tensorrt-pytorch requirements
-RUN pip3 install notebook absl-py>=0.7.0 scipy sphinx_glpi_theme prettytable pyyaml tqdm ninja cython ipywidgets
+RUN pip3 install notebook absl-py>=0.7.0 scipy sphinx_glpi_theme prettytable pyyaml tqdm ninja cython ipywidgets matplotlib
 
 COPY pytorch-quantization /etc/pytorch-quantization
 

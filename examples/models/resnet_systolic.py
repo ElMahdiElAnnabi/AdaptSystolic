@@ -17,33 +17,54 @@ __all__ = [
     "resnet50_systolic",
 ]
 
-# global knobs (mirrors your style)
 _systolic_axx_mult  = "mul8s_acc"
 _systolic_use_exact = True   # True → exact multiply, False → LUT approx
+_systolic_sa_rows   = 16     # default systolic array rows
+_systolic_sa_cols   = 16     # default systolic array cols
 
 
-def conv3x3_systolic(in_planes, out_planes, stride=1, groups=1, dilation=1):
+def conv3x3_systolic(in_planes, out_planes, stride=1, groups=1, dilation=1, 
+                     axx_mult=None, use_exact=None, sa_rows=None, sa_cols=None):
     """3x3 systolic convolution with padding."""
+    # Use provided parameters or fall back to globals
+    axx_mult = axx_mult if axx_mult is not None else _systolic_axx_mult
+    use_exact = use_exact if use_exact is not None else _systolic_use_exact
+    sa_rows = sa_rows if sa_rows is not None else _systolic_sa_rows
+    sa_cols = sa_cols if sa_cols is not None else _systolic_sa_cols
+    
     return SConv2d(
         in_planes, out_planes,
         kernel_size=3, stride=stride, padding=dilation,
         groups=groups, bias=False, dilation=dilation,
-        axx_mult=_systolic_axx_mult, use_exact=_systolic_use_exact
+        axx_mult=axx_mult,
+        use_exact=use_exact,
+        sa_rows=sa_rows,
+        sa_cols=sa_cols,
     )
 
-def conv1x1_systolic(in_planes, out_planes, stride=1):
+def conv1x1_systolic(in_planes, out_planes, stride=1, 
+                     axx_mult=None, use_exact=None, sa_rows=None, sa_cols=None):
     """1x1 systolic convolution."""
+    axx_mult = axx_mult if axx_mult is not None else _systolic_axx_mult
+    use_exact = use_exact if use_exact is not None else _systolic_use_exact
+    sa_rows = sa_rows if sa_rows is not None else _systolic_sa_rows
+    sa_cols = sa_cols if sa_cols is not None else _systolic_sa_cols
+    
     return SConv2d(
         in_planes, out_planes,
         kernel_size=1, stride=stride, bias=False,
-        axx_mult=_systolic_axx_mult, use_exact=_systolic_use_exact
+        axx_mult=axx_mult,
+        use_exact=use_exact,
+        sa_rows=sa_rows,
+        sa_cols=sa_cols,
     )
 
 
 class BasicBlockSystolic(nn.Module):
     expansion = 1
     def __init__(self, inplanes, planes, stride=1, downsample=None,
-                 groups=1, base_width=64, dilation=1, norm_layer=None):
+                 groups=1, base_width=64, dilation=1, norm_layer=None,
+                 axx_mult=None, use_exact=None, sa_rows=None, sa_cols=None):
         super().__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -52,10 +73,14 @@ class BasicBlockSystolic(nn.Module):
         if dilation > 1:
             raise NotImplementedError("Dilation > 1 not supported in BasicBlockSystolic")
 
-        self.conv1 = conv3x3_systolic(inplanes, planes, stride)
+        self.conv1 = conv3x3_systolic(inplanes, planes, stride, 
+                                     axx_mult=axx_mult, use_exact=use_exact, 
+                                     sa_rows=sa_rows, sa_cols=sa_cols)
         self.bn1   = norm_layer(planes)
         self.relu  = nn.ReLU(inplace=True)
-        self.conv2 = conv3x3_systolic(planes, planes)
+        self.conv2 = conv3x3_systolic(planes, planes,
+                                     axx_mult=axx_mult, use_exact=use_exact,
+                                     sa_rows=sa_rows, sa_cols=sa_cols)
         self.bn2   = norm_layer(planes)
         self.downsample = downsample
         self.stride = stride
@@ -73,17 +98,24 @@ class BasicBlockSystolic(nn.Module):
 class BottleneckSystolic(nn.Module):
     expansion = 4
     def __init__(self, inplanes, planes, stride=1, downsample=None,
-                 groups=1, base_width=64, dilation=1, norm_layer=None):
+                 groups=1, base_width=64, dilation=1, norm_layer=None,
+                 axx_mult=None, use_exact=None, sa_rows=None, sa_cols=None):
         super().__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
         width = int(planes * (base_width / 64.0)) * groups
 
-        self.conv1 = conv1x1_systolic(inplanes, width)
+        self.conv1 = conv1x1_systolic(inplanes, width,
+                                     axx_mult=axx_mult, use_exact=use_exact,
+                                     sa_rows=sa_rows, sa_cols=sa_cols)
         self.bn1   = norm_layer(width)
-        self.conv2 = conv3x3_systolic(width, width, stride, groups, dilation)
+        self.conv2 = conv3x3_systolic(width, width, stride, groups, dilation,
+                                     axx_mult=axx_mult, use_exact=use_exact,
+                                     sa_rows=sa_rows, sa_cols=sa_cols)
         self.bn2   = norm_layer(width)
-        self.conv3 = conv1x1_systolic(width, planes * self.expansion)
+        self.conv3 = conv1x1_systolic(width, planes * self.expansion,
+                                     axx_mult=axx_mult, use_exact=use_exact,
+                                     sa_rows=sa_rows, sa_cols=sa_cols)
         self.bn3   = norm_layer(planes * self.expansion)
         self.relu  = nn.ReLU(inplace=True)
         self.downsample = downsample
@@ -103,10 +135,16 @@ class BottleneckSystolic(nn.Module):
 class ResNetSystolic(nn.Module):
     def __init__(self, block, layers, num_classes=10, zero_init_residual=False,
                  groups=1, width_per_group=64, replace_stride_with_dilation=None,
-                 norm_layer=None):
+                 norm_layer=None, axx_mult=None, use_exact=None, sa_rows=None, sa_cols=None):
         super().__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
+
+        # Use provided parameters or fall back to globals
+        self.axx_mult = axx_mult if axx_mult is not None else _systolic_axx_mult
+        self.use_exact = use_exact if use_exact is not None else _systolic_use_exact
+        self.sa_rows = sa_rows if sa_rows is not None else _systolic_sa_rows
+        self.sa_cols = sa_cols if sa_cols is not None else _systolic_sa_cols
 
         self._norm_layer = norm_layer
         self.inplanes = 64
@@ -122,13 +160,14 @@ class ResNetSystolic(nn.Module):
         # CIFAR-style stem (3x3, stride 1, pad 1)
         self.conv1 = SConv2d(
             3, self.inplanes, kernel_size=3, stride=1, padding=1, bias=False,
-            axx_mult=_systolic_axx_mult, use_exact=_systolic_use_exact
+            axx_mult=self.axx_mult, use_exact=self.use_exact,
+            sa_rows=self.sa_rows, sa_cols=self.sa_cols,
         )
         self.bn1   = norm_layer(self.inplanes)
         self.relu  = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
-        self.layer1 = self._make_layer(block,  64, layers[0])
+        self.layer1 = self._make_layer(block, 64, layers[0])
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2,
                                        dilate=replace_stride_with_dilation[0])
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2,
@@ -138,10 +177,12 @@ class ResNetSystolic(nn.Module):
 
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         # Systolic linear head
-        self.fc = SLinear(512 * block.expansion, num_classes,
-                          bias=True, axx_mult=_systolic_axx_mult, use_exact=_systolic_use_exact)
+        self.fc = SLinear(
+            512 * block.expansion, num_classes, bias=True,
+            axx_mult=self.axx_mult, use_exact=self.use_exact,
+            sa_rows=self.sa_rows, sa_cols=self.sa_cols,
+        )
 
-        # Init like your original
         for m in self.modules():
             if isinstance(m, (nn.Conv2d, SConv2d)):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
@@ -166,18 +207,24 @@ class ResNetSystolic(nn.Module):
 
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
-                conv1x1_systolic(self.inplanes, planes * block.expansion, stride),
+                conv1x1_systolic(self.inplanes, planes * block.expansion, stride,
+                                axx_mult=self.axx_mult, use_exact=self.use_exact,
+                                sa_rows=self.sa_rows, sa_cols=self.sa_cols),
                 norm_layer(planes * block.expansion),
             )
 
         layers = []
         layers.append(block(self.inplanes, planes, stride, downsample,
-                            self.groups, self.base_width, previous_dilation, norm_layer))
+                            self.groups, self.base_width, previous_dilation, norm_layer,
+                            axx_mult=self.axx_mult, use_exact=self.use_exact,
+                            sa_rows=self.sa_rows, sa_cols=self.sa_cols))
         self.inplanes = planes * block.expansion
         for _ in range(1, blocks):
             layers.append(block(self.inplanes, planes,
                                 groups=self.groups, base_width=self.base_width,
-                                dilation=self.dilation, norm_layer=norm_layer))
+                                dilation=self.dilation, norm_layer=norm_layer,
+                                axx_mult=self.axx_mult, use_exact=self.use_exact,
+                                sa_rows=self.sa_rows, sa_cols=self.sa_cols))
         return nn.Sequential(*layers)
 
     def forward(self, x):
@@ -189,7 +236,7 @@ class ResNetSystolic(nn.Module):
         return x
 
 
-# ---- factory helpers (mirror your API) --------------------------------------
+# ---- factory helpers ----------------
 
 def _resnet_systolic(arch, block, layers, pretrained, progress, device, **kwargs):
     model = ResNetSystolic(block, layers, **kwargs)
@@ -203,27 +250,27 @@ def _resnet_systolic(arch, block, layers, pretrained, progress, device, **kwargs
 
 
 def resnet18_systolic(pretrained=False, progress=True, device="cpu",
-                      axx_mult="mul8s_acc", use_exact=True, **kwargs):
-    global _systolic_axx_mult, _systolic_use_exact
-    _systolic_axx_mult  = axx_mult
-    _systolic_use_exact = use_exact
+                      axx_mult="mul8s_acc", use_exact=True,
+                      sa_rows: int = 16, sa_cols: int = 16, **kwargs):
     return _resnet_systolic("resnet18", BasicBlockSystolic, [2, 2, 2, 2],
-                            pretrained, progress, device, **kwargs)
+                            pretrained, progress, device, 
+                            axx_mult=axx_mult, use_exact=use_exact,
+                            sa_rows=sa_rows, sa_cols=sa_cols, **kwargs)
 
 
 def resnet34_systolic(pretrained=False, progress=True, device="cpu",
-                      axx_mult="mul8s_acc", use_exact=True, **kwargs):
-    global _systolic_axx_mult, _systolic_use_exact
-    _systolic_axx_mult  = axx_mult
-    _systolic_use_exact = use_exact
+                      axx_mult="mul8s_acc", use_exact=True,
+                      sa_rows: int = 16, sa_cols: int = 16, **kwargs):
     return _resnet_systolic("resnet34", BasicBlockSystolic, [3, 4, 6, 3],
-                            pretrained, progress, device, **kwargs)
+                            pretrained, progress, device,
+                            axx_mult=axx_mult, use_exact=use_exact,
+                            sa_rows=sa_rows, sa_cols=sa_cols, **kwargs)
 
 
 def resnet50_systolic(pretrained=False, progress=True, device="cpu",
-                      axx_mult="mul8s_acc", use_exact=True, **kwargs):
-    global _systolic_axx_mult, _systolic_use_exact
-    _systolic_axx_mult  = axx_mult
-    _systolic_use_exact = use_exact
+                      axx_mult="mul8s_acc", use_exact=True,
+                      sa_rows: int = 16, sa_cols: int = 16, **kwargs):
     return _resnet_systolic("resnet50", BottleneckSystolic, [3, 4, 6, 3],
-                            pretrained, progress, device, **kwargs)
+                            pretrained, progress, device,
+                            axx_mult=axx_mult, use_exact=use_exact,
+                            sa_rows=sa_rows, sa_cols=sa_cols, **kwargs)
